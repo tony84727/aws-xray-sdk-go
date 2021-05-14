@@ -22,9 +22,24 @@ import (
 )
 
 // UnaryClientInterceptor provides gRPC unary client interceptor.
-func UnaryClientInterceptor(host string) grpc.UnaryClientInterceptor {
+func UnaryClientInterceptor(clientInterceptorOptions ...ClientInterceptorOption) grpc.UnaryClientInterceptor {
+	var option clientInterceptorOption
+	for _, interceptorOption := range clientInterceptorOptions {
+		interceptorOption.apply(&option)
+	}
+
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		return Capture(ctx, host, func(ctx context.Context) error {
+		host := cc.Target()
+		if option.host != nil {
+			host = *option.host
+		}
+		var segmentName string
+		if option.segmentNamer == nil {
+			segmentName = inferServiceName(method)
+		} else {
+			segmentName = option.segmentNamer.Name(host)
+		}
+		return Capture(ctx, segmentName, func(ctx context.Context) error {
 			seg := GetSegment(ctx)
 			if seg == nil {
 				return errors.New("failed to record gRPC transaction: segment cannot be found")
@@ -211,5 +226,38 @@ func ServerInterceptorWithContext(ctx context.Context) ServerInterceptorOption {
 func ServerInterceptorWithSegmentNamer(sn SegmentNamer) ServerInterceptorOption {
 	return newFuncServerInterceptorOption(func(option *serverInterceptorOption) {
 		option.segmentNamer = sn
+	})
+}
+
+type ClientInterceptorOption interface {
+	apply(option *clientInterceptorOption)
+}
+
+type clientInterceptorOption struct {
+	segmentNamer SegmentNamer
+	host         *string
+}
+
+func newFuncClientInterceptorOption(f func(option *clientInterceptorOption)) ClientInterceptorOption {
+	return funcClientInterceptorOption{f: f}
+}
+
+type funcClientInterceptorOption struct {
+	f func(option *clientInterceptorOption)
+}
+
+func (f funcClientInterceptorOption) apply(option *clientInterceptorOption) {
+	f.f(option)
+}
+
+func ClientInterceptorWithSegmentNamer(sn SegmentNamer) ClientInterceptorOption {
+	return newFuncClientInterceptorOption(func(option *clientInterceptorOption) {
+		option.segmentNamer = sn
+	})
+}
+
+func ClientInterceptorWithHost(host string) ClientInterceptorOption {
+	return newFuncClientInterceptorOption(func(option *clientInterceptorOption) {
+		option.host = &host
 	})
 }

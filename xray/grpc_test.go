@@ -128,7 +128,7 @@ func TestGrpcUnaryClientInterceptor(t *testing.T) {
 			),
 		),
 	)
-	client, closeFunc := newGrpcClient(context.Background(), t, lis, grpc.WithUnaryInterceptor(UnaryClientInterceptor("bufnet")))
+	client, closeFunc := newGrpcClient(context.Background(), t, lis, grpc.WithUnaryInterceptor(UnaryClientInterceptor(ClientInterceptorWithHost("bufnet"))))
 	defer closeFunc()
 
 	testCases := []testCase{
@@ -200,6 +200,37 @@ func TestGrpcUnaryClientInterceptor(t *testing.T) {
 			assert.Equal(t, tc.getExpectedContentLength(), subseg.HTTP.Response.ContentLength)
 		})
 	}
+	t.Run("default namer", func(t *testing.T) {
+		lis := newGrpcServer(
+			t,
+			grpc_middleware.WithUnaryServerChain(
+				UnaryServerInterceptor(
+					ServerInterceptorWithSegmentNamer(NewFixedSegmentNamer("test")),
+				),
+			),
+		)
+		client, closeFunc := newGrpcClient(
+			context.Background(),
+			t,
+			lis,
+			grpc.WithUnaryInterceptor(UnaryClientInterceptor()))
+		defer closeFunc()
+
+		ctx, td := NewTestDaemon()
+		defer td.Close()
+		ctx, root := BeginSegment(ctx, "Test")
+		_, err := client.Ping(ctx, &pb.PingRequest{Value: "something", SleepTimeMs: 9999})
+		assert.NoError(t, err)
+		root.Close(nil)
+
+		seg, err := td.Recv()
+		require.NoError(t, err)
+
+		var subseg *Segment
+		assert.NoError(t, json.Unmarshal(seg.Subsegments[0], &subseg))
+		assert.Equal(t, "mwitkow.testproto.TestService", subseg.Name)
+		assert.Equal(t, "grpc://bufnet/mwitkow.testproto.TestService/Ping", subseg.HTTP.Request.URL)
+	})
 }
 
 func TestUnaryServerInterceptor(t *testing.T) {
